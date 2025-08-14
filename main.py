@@ -23,9 +23,9 @@ def today_str():
 
 # --- SVG-status ---
 def svg_status(voltage):
-    if voltage > 2.5:
+    if voltage < .3:
         color = "green"
-    elif voltage > 2.0:
+    elif voltage < .6:
         color = "yellow"
     else:
         color = "red"
