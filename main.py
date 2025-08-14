@@ -1,4 +1,4 @@
-# MicroPython – Kattemater med enkel webserver og logg
+# MicroPython – Kattemater m/2 sensorer, dagsteller, SVG-status
 # Linjelengde <= 80
 
 import network
@@ -21,34 +21,48 @@ def today_str():
     t = time.localtime()
     return "%04d-%02d-%02d" % (t[0], t[1], t[2])
 
+# --- SVG-status ---
+def svg_status(voltage):
+    if voltage > 2.5:
+        color = "green"
+    elif voltage > 2.0:
+        color = "yellow"
+    else:
+        color = "red"
+    return (f"<svg width='20' height='20'>"
+            f"<circle cx='10' cy='10' r='8' fill='{color}'/>"
+            f"</svg>")
+
 # --- Klasse ---
 class Kattemater:
-    def __init__(self, knapp_pin, adc_pin,
+    def __init__(self, knapp_pin, adc_pin1, adc_pin2,
                  thr_mid_v=0.66, hyst_v=0.03, press_s=0.5):
         self.knapp = machine.Pin(knapp_pin, machine.Pin.OUT)
-        self.adc = machine.ADC(adc_pin)
+        self.adc1 = machine.ADC(adc_pin1)
+        self.adc2 = machine.ADC(adc_pin2)
         self.conv = 3.3 / 65535
         self.logg = []
-        self.knapp.value(1)  # slipp
+        self.knapp.value(1)
         self.thr_mid_v = thr_mid_v
         self.hyst_v = hyst_v
-        self.state = None  # "mer_enn_halv" eller "mindre_enn_halv"
+        self.state = None
         self.press_s = press_s
+        self.teller = 0
+        self.dato = today_str()
 
-    def _adc_avg(self, n=16):
+    def _adc_avg(self, adc, n=16):
         s = 0
         for _ in range(n):
-            s += self.adc.read_u16()
+            s += adc.read_u16()
         raw = s // n
         v = raw * self.conv
         return raw, v
 
-    def les_sensor(self):
-        return self._adc_avg()
+    def les_sensorer(self):
+        return self._adc_avg(self.adc1), self._adc_avg(self.adc2)
 
     def nivaa(self):
-        # Lav volt = mer enn halvfull, høy volt = mindre enn halvfull
-        _, v = self._adc_avg()
+        _, v = self._adc_avg(self.adc1)
         low_t = self.thr_mid_v - self.hyst_v
         high_t = self.thr_mid_v + self.hyst_v
         if self.state is None:
@@ -64,27 +78,21 @@ class Kattemater:
         return v, txt
 
     def mate(self, varighet=None):
+        if today_str() != self.dato:
+            self.teller = 0
+            self.dato = today_str()
         dur = self.press_s if varighet is None else varighet
         self.knapp.value(0)
         time.sleep(dur)
         self.knapp.value(1)
+        self.teller += 1
         ts = now_str()
-        self.logg.insert(0, f"{ts} - matet i {dur:.2f}s")
+        self.logg.insert(0, f"{ts} - matet i {dur:.2f}s "
+                            f"(nr {self.teller} i dag)")
         self.logg = self.logg[:30]
 
-    def __str__(self):
-        raw, v = self.les_sensor()
-        _, niv_txt = self.nivaa()
-        s = []
-        s.append("Kattemater status")
-        s.append(f"Sensor: {raw} ({v:.2f} V) - {niv_txt}")
-        s.append("Logg:")
-        for e in self.logg:
-            s.append(f"  {e}")
-        return "\n".join(s)
-
     def to_html(self):
-        raw, v = self.les_sensor()
+        (raw1, v1), (raw2, v2) = self.les_sensorer()
         _, niv_txt = self.nivaa()
         log_items = "".join(f"<li>{e}</li>" for e in self.logg)
         html = []
@@ -92,8 +100,10 @@ class Kattemater:
         html.append("<html><head><meta charset='utf-8'>")
         html.append("<title>Kattemater</title></head><body>")
         html.append("<h1>Kattemater</h1>")
-        html.append(f"<p>Sensor: raw={raw}, volt={v:.2f} V</p>")
-        html.append(f"<p>Nivå: <b>{niv_txt}</b></p>")
+        html.append(f"<p>Sensor1: raw={raw1}, volt={v1:.2f} V</p>")
+        html.append(f"<p>Sensor2: raw={raw2}, volt={v2:.2f} V</p>")
+        html.append(f"<p>Nivå: <b>{niv_txt}</b> {svg_status(v2)}</p>")
+        html.append(f"<p>Matinger i dag: {self.teller}</p>")
         html.append("<form method='POST'>")
         html.append("<button type='submit'>Mat Kisse</button>")
         html.append("</form>")
@@ -113,9 +123,8 @@ while not wlan.isconnected():
 print("Tilkoblet!", wlan.ifconfig())
 
 # --- Server ---
-acd_half = {'acd_pin': 26, thr_mid_v=0.66, hyst_v=0.03}
-acd_empty = {'acd_pin': 27, thr_mid_v=0.66, hyst_v=0.03}
-mater = Kattemater(knapp_pin=15, adc_pin=26, thr_mid_v=0.66, hyst_v=0.03)
+mater = Kattemater(knapp_pin=15, adc_pin1=26, adc_pin2=27,
+                   thr_mid_v=0.66, hyst_v=0.03)
 
 addr = socket.getaddrinfo('0.0.0.0', PORT)[0][-1]
 srv = socket.socket()
